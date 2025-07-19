@@ -1,0 +1,426 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Interactive Spam Detector Neural Network</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .neuron, .neuron-text {
+            cursor: pointer;
+        }
+        .neuron-text {
+            font-size: 10px;
+            font-family: monospace;
+            font-weight: 700;
+            pointer-events: none; /* Allows hover on circle beneath */
+            transition: fill 0.2s ease-in-out;
+        }
+        .weight-line {
+            transition: stroke 0.2s ease-in-out, stroke-width 0.2s ease-in-out;
+            cursor: pointer;
+        }
+        .tooltip {
+            position: absolute;
+            background-color: rgba(0, 0, 0, 0.8);
+            color: white;
+            padding: 5px 10px;
+            border-radius: 5px;
+            font-size: 0.8rem;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.2s;
+            white-space: nowrap;
+            z-index: 10;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800 p-4 md:p-6">
+
+    <div class="max-w-7xl mx-auto bg-white rounded-xl shadow-lg p-6">
+        <div class="text-center mb-4">
+            <h1 class="text-2xl md:text-3xl font-bold text-gray-900">Live Neural Network Training: Spam Detector</h1>
+            <p class="text-gray-600 mt-2">Watch the network learn to classify emails. Activations, weights, and errors update in real-time.</p>
+        </div>
+
+        <!-- Controls and Status -->
+        <div class="bg-gray-50 p-4 rounded-lg shadow-inner mb-6 flex flex-wrap items-center justify-center gap-4">
+            <div class="flex items-center space-x-2">
+                <button id="start-stop-btn" class="bg-blue-500 hover:bg-blue-600 text-white font-bold py-2 px-4 rounded-md transition-colors w-28">Start</button>
+                <button id="step-btn" class="bg-green-500 hover:bg-green-600 text-white font-bold py-2 px-4 rounded-md transition-colors" disabled>Step</button>
+                <button id="reset-btn" class="bg-red-500 hover:bg-red-600 text-white font-bold py-2 px-4 rounded-md transition-colors">Reset</button>
+            </div>
+            <div class="text-center">
+                <label for="total-iterations-input" class="font-semibold">Total Iterations:</label>
+                <input type="number" id="total-iterations-input" value="20000" class="font-mono bg-white px-2 py-1 rounded w-24 text-center border">
+            </div>
+            <div class="text-center">
+                <span class="font-semibold">Current Iteration:</span>
+                <span id="iteration-count" class="font-mono bg-white px-2 py-1 rounded">0</span>
+            </div>
+            <div class="text-center">
+                <span class="font-semibold">Avg. Error:</span>
+                <span id="error-display" class="font-mono bg-white px-2 py-1 rounded">N/A</span>
+            </div>
+        </div>
+
+        <!-- Main Visualization -->
+        <div class="grid grid-cols-1 lg:grid-cols-4 gap-6 items-start">
+            <div class="lg:col-span-3 bg-gray-800 rounded-lg p-2 shadow-lg">
+                <svg id="network-svg" width="100%" height="600"></svg>
+            </div>
+            <div class="lg:col-span-1 bg-blue-50 p-4 rounded-lg border border-blue-200">
+                <h3 class="text-xl font-semibold text-blue-900 mb-2 text-center">Current State</h3>
+                <div class="mb-4">
+                    <p class="font-semibold">Current Email:</p>
+                    <p id="current-email" class="bg-white p-2 rounded text-sm font-mono"></p>
+                </div>
+                <div class="mb-4">
+                    <p class="font-semibold">Network Prediction:</p>
+                    <p id="prediction-display" class="bg-white p-2 rounded text-sm font-mono"></p>
+                </div>
+                 <div class="mb-4">
+                    <p class="font-semibold">Correct Label:</p>
+                    <p id="correct-label" class="bg-white p-2 rounded text-sm font-mono"></p>
+                </div>
+                <hr class="my-4">
+                <h3 class="text-xl font-semibold text-blue-900 mb-2 text-center">Explanation</h3>
+                <p id="explanation-text" class="text-blue-800 text-sm h-48"></p>
+            </div>
+        </div>
+    </div>
+    <div id="tooltip" class="tooltip"></div>
+
+    <script>
+        // --- Core Application Logic ---
+        const svg = document.getElementById('network-svg');
+        const tooltip = document.getElementById('tooltip');
+
+        // --- DOM Elements ---
+        const iterationCountEl = document.getElementById('iteration-count');
+        const errorDisplayEl = document.getElementById('error-display');
+        const startStopBtn = document.getElementById('start-stop-btn');
+        const resetBtn = document.getElementById('reset-btn');
+        const stepBtn = document.getElementById('step-btn');
+        const totalIterationsInput = document.getElementById('total-iterations-input');
+        const currentEmailEl = document.getElementById('current-email');
+        const predictionDisplayEl = document.getElementById('prediction-display');
+        const correctLabelEl = document.getElementById('correct-label');
+        const explanationTextEl = document.getElementById('explanation-text');
+
+        // --- State Variables ---
+        let isRunning = false;
+        let iteration = 0;
+        let totalIterations = 20000;
+        let currentExampleIndex = 0;
+        let animationFrameId;
+
+        // Simplified NumPy-like operations
+        const np = {
+            array: (arr) => arr.map(row => Array.isArray(row) ? [...row] : row),
+            zeros: (shape) => Array(shape).fill(0),
+            exp: Math.exp,
+            dot: (a, b) => {
+                const aRows = a.length, aCols = a[0].length;
+                const bRows = b.length, bCols = b[0].length;
+                if (aCols !== bRows) throw "Matrix dimensions do not match for dot product";
+                const result = Array(aRows).fill(0).map(() => Array(bCols).fill(0));
+                for (let i = 0; i < aRows; i++) {
+                    for (let j = 0; j < bCols; j++) {
+                        for (let k = 0; k < aCols; k++) {
+                            result[i][j] += a[i][k] * b[k][j];
+                        }
+                    }
+                }
+                return result;
+            },
+            transpose: (matrix) => matrix[0].map((_, colIndex) => matrix.map(row => row[colIndex])),
+            mean: (arr) => arr.reduce((acc, val) => acc + Math.abs(val[0]), 0) / arr.length,
+            abs: (matrix) => matrix.map(row => row.map(Math.abs)),
+        };
+
+        // --- Network and Data Setup ---
+        const vocabulary = ["action", "account", "buy", "free", "hello", "meeting", "money", "now", "urgent", "verify", "winner", "your"];
+        const sentences = [
+            "hello, let's schedule a meeting", "urgent action required, verify your account",
+            "buy now, free money for every winner", "hello, meeting about your account"
+        ];
+        const labels = np.array([[0], [1], [1], [0]]);
+        let X, y;
+        let weights0, weights1;
+        let layer0, layer1, layer2;
+
+        function sentenceToVector(sentence, vocab) {
+            const words = sentence.toLowerCase().split(/\s+/);
+            const vector = np.zeros(vocab.length);
+            for (let i = 0; i < vocab.length; i++) {
+                if (words.includes(vocab[i])) {
+                    vector[i] = 1;
+                }
+            }
+            return vector;
+        }
+
+        function sigmoid(x) { return 1 / (1 + np.exp(-x)); }
+        function sigmoid_derivative(x) { return x * (1 - x); }
+
+        function initializeNetwork() {
+            iteration = 0;
+            currentExampleIndex = 0;
+            totalIterations = parseInt(totalIterationsInput.value) || 20000;
+            X = np.array(sentences.map(s => sentenceToVector(s, vocabulary)));
+            y = labels;
+
+            let seed = 1;
+            function random() {
+                var x = Math.sin(seed++) * 10000;
+                return x - Math.floor(x);
+            }
+
+            weights0 = Array(vocabulary.length).fill(0).map(() => Array(5).fill(0).map(() => 2 * random() - 1));
+            weights1 = Array(5).fill(0).map(() => Array(1).fill(0).map(() => 2 * random() - 1));
+
+            drawNetwork();
+            updateStatusDisplays();
+            updateExplanation("Network reset to random weights. Press Start or Step to begin training.");
+        }
+
+        function trainingStep() {
+            if (iteration >= totalIterations) {
+                stop();
+                updateExplanation("Training complete! The specified number of iterations has been reached.");
+                return;
+            }
+
+            const currentX = [X[currentExampleIndex]];
+            const currentY = [y[currentExampleIndex]];
+
+            updateExplanation("Forward Pass: Calculating activations...");
+            layer0 = currentX;
+            const pre_layer1 = np.dot(layer0, weights0);
+            layer1 = pre_layer1.map(row => row.map(sigmoid));
+            const pre_layer2 = np.dot(layer1, weights1);
+            layer2 = pre_layer2.map(row => row.map(sigmoid));
+
+            updateExplanation("Backward Pass: Calculating error and gradients...");
+            const layer2_error = currentY.map((row, i) => row.map((val, j) => val - layer2[i][j]));
+            const layer2_delta = layer2_error.map((row, i) => row.map((val, j) => val * sigmoid_derivative(layer2[i][j])));
+            const layer1_error = np.dot(layer2_delta, np.transpose(weights1));
+            const layer1_delta = layer1_error.map((row, i) => row.map((val, j) => val * sigmoid_derivative(layer1[0][j])));
+
+            updateExplanation("Update Step: Adjusting weights...");
+            const weights1_update = np.dot(np.transpose(layer1), layer2_delta);
+            weights1 = weights1.map((row, i) => row.map((val, j) => val + weights1_update[i][j]));
+            const weights0_update = np.dot(np.transpose(layer0), layer1_delta);
+            weights0 = weights0.map((row, i) => row.map((val, j) => val + weights0_update[i][j]));
+
+            updateVisualization();
+            updateStatusDisplays(layer2_error);
+
+            iteration++;
+            currentExampleIndex = (currentExampleIndex + 1) % X.length;
+        }
+
+        function trainingLoop() {
+            if (isRunning && iteration < totalIterations) {
+                trainingStep();
+                animationFrameId = requestAnimationFrame(trainingLoop);
+            } else if (iteration >= totalIterations) {
+                stop();
+                updateExplanation("Training complete! The specified number of iterations has been reached.");
+            }
+        }
+
+        // --- Visualization Functions ---
+        function drawNetwork() {
+            svg.innerHTML = '';
+            const width = svg.clientWidth;
+            const height = svg.clientHeight;
+
+            const layers = [
+                { count: vocabulary.length, label: 'Input Layer', neurons: [], radius: 8 },
+                { count: 5, label: 'Hidden Layer', neurons: [], radius: 15 },
+                { count: 1, label: 'Output Layer', neurons: [], radius: 15 }
+            ];
+
+            const layerSpacing = width / (layers.length + 1);
+
+            layers.forEach((layer, i) => {
+                const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                text.setAttribute('x', (i + 1) * layerSpacing);
+                text.setAttribute('y', 30);
+                text.setAttribute('fill', 'white');
+                text.setAttribute('text-anchor', 'middle');
+                text.textContent = layer.label;
+                svg.appendChild(text);
+            });
+
+            layers.forEach((layer, i) => {
+                const neuronSpacing = height / (layer.count + 1);
+                for (let j = 0; j < layer.count; j++) {
+                    layer.neurons.push({ x: (i + 1) * layerSpacing, y: (j + 1) * neuronSpacing });
+                }
+            });
+
+            for (let i = 0; i < layers.length - 1; i++) {
+                layers[i].neurons.forEach((neuron1, j) => {
+                    layers[i+1].neurons.forEach((neuron2, k) => {
+                        const line = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+                        line.setAttribute('x1', neuron1.x); line.setAttribute('y1', neuron1.y);
+                        line.setAttribute('x2', neuron2.x); line.setAttribute('y2', neuron2.y);
+                        line.setAttribute('stroke', 'gray'); line.setAttribute('stroke-width', '1');
+                        line.id = `w-${i}-${j}-${k}`;
+                        line.classList.add('weight-line');
+                        line.addEventListener('mouseenter', (e) => showTooltip(e, `Weight: ${ (i === 0 ? weights0[j][k] : weights1[j][k]).toFixed(3) }`));
+                        line.addEventListener('mouseleave', hideTooltip);
+                        svg.appendChild(line);
+                    });
+                });
+            }
+
+            layers.forEach((layer, i) => {
+                layer.neurons.forEach((neuron, j) => {
+                    const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+                    circle.setAttribute('cx', neuron.x); circle.setAttribute('cy', neuron.y);
+                    circle.setAttribute('r', layer.radius);
+                    circle.setAttribute('fill', '#4B5563'); circle.setAttribute('stroke', 'white');
+                    circle.setAttribute('stroke-width', '2');
+                    circle.id = `n-${i}-${j}`;
+                    circle.classList.add('neuron');
+                    circle.addEventListener('mouseenter', (e) => showTooltip(e, getNeuronTooltipText(i, j)));
+                    circle.addEventListener('mouseleave', hideTooltip);
+                    svg.appendChild(circle);
+
+                    const text = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+                    text.setAttribute('x', neuron.x); text.setAttribute('y', neuron.y + 4);
+                    text.id = `t-${i}-${j}`;
+                    text.setAttribute('text-anchor', 'middle');
+                    text.classList.add('neuron-text');
+                    svg.appendChild(text);
+                });
+            });
+        }
+
+        function updateVisualization() {
+            for (let i = 0; i < vocabulary.length; i++) {
+                const activation = X[currentExampleIndex][i];
+                document.getElementById(`n-0-${i}`).style.fill = `rgba(251, 191, 36, ${activation})`;
+                const textEl = document.getElementById(`t-0-${i}`);
+                textEl.textContent = activation.toFixed(0);
+                textEl.style.fill = activation > 0.5 ? '#1F2937' : '#F9FAFB';
+            }
+
+            for (let i = 0; i < 5; i++) {
+                const activation = layer1[0][i];
+                document.getElementById(`n-1-${i}`).style.fill = `rgba(251, 191, 36, ${activation})`;
+                const textEl = document.getElementById(`t-1-${i}`);
+                textEl.textContent = activation.toFixed(2);
+                textEl.style.fill = activation > 0.5 ? '#1F2937' : '#F9FAFB';
+            }
+
+            const outputActivation = layer2[0][0];
+            document.getElementById(`n-2-0`).style.fill = `rgba(251, 191, 36, ${outputActivation})`;
+            const textEl = document.getElementById(`t-2-0`);
+            textEl.textContent = outputActivation.toFixed(2);
+            textEl.style.fill = outputActivation > 0.5 ? '#1F2937' : '#F9FAFB';
+
+            for (let i = 0; i < vocabulary.length; i++) {
+                for (let j = 0; j < 5; j++) {
+                    const line = document.getElementById(`w-0-${i}-${j}`);
+                    const weight = weights0[i][j];
+                    line.style.stroke = weight > 0 ? '#10B981' : '#EF4444';
+                    line.style.strokeWidth = Math.min(Math.abs(weight) * 1.5, 5);
+                    line.style.opacity = Math.min(Math.abs(weight) * 0.5 + 0.1, 1);
+                }
+            }
+
+            for (let i = 0; i < 5; i++) {
+                const line = document.getElementById(`w-1-${i}-0`);
+                const weight = weights1[i][0];
+                line.style.stroke = weight > 0 ? '#10B981' : '#EF4444';
+                line.style.strokeWidth = Math.min(Math.abs(weight) * 1.5, 5);
+                line.style.opacity = Math.min(Math.abs(weight) * 0.5 + 0.1, 1);
+            }
+        }
+
+        function updateStatusDisplays(error) {
+            iterationCountEl.textContent = iteration;
+            if (error) errorDisplayEl.textContent = np.mean(error).toFixed(4);
+            currentEmailEl.textContent = `"${sentences[currentExampleIndex]}"`;
+            const prediction = layer2 ? layer2[0][0] : 0;
+            predictionDisplayEl.textContent = `${prediction.toFixed(3)} (${prediction > 0.5 ? 'SPAM' : 'NOT SPAM'})`;
+            correctLabelEl.textContent = `${y[currentExampleIndex][0]} (${y[currentExampleIndex][0] === 1 ? 'SPAM' : 'NOT SPAM'})`;
+        }
+
+        function updateExplanation(text) { explanationTextEl.textContent = text; }
+
+        function showTooltip(event, text) {
+            tooltip.innerHTML = text;
+            tooltip.style.left = `${event.pageX + 15}px`;
+            tooltip.style.top = `${event.pageY + 15}px`;
+            tooltip.style.opacity = 1;
+        }
+        function getNeuronTooltipText(layerIndex, neuronIndex) {
+            if (layerIndex === 0) return `Input: "${vocabulary[neuronIndex]}"<br>Activation: ${X[currentExampleIndex][neuronIndex]}`;
+            if (layerIndex === 1) return `Hidden Neuron #${neuronIndex+1}<br>Activation: ${layer1 ? layer1[0][neuronIndex].toFixed(3) : 'N/A'}`;
+            return `Output Neuron<br>Activation: ${layer2 ? layer2[0][0].toFixed(3) : 'N/A'}`;
+        }
+        function hideTooltip() { tooltip.style.opacity = 0; }
+
+        // --- Control Functions ---
+        function start() {
+            if (isRunning) return;
+            isRunning = true;
+            startStopBtn.textContent = 'Stop';
+            startStopBtn.classList.remove('bg-blue-500', 'hover:bg-blue-600');
+            startStopBtn.classList.add('bg-yellow-500', 'hover:bg-yellow-600');
+            stepBtn.disabled = true;
+            totalIterationsInput.disabled = true;
+            totalIterations = parseInt(totalIterationsInput.value) || 20000;
+            trainingLoop();
+        }
+
+        function stop() {
+            isRunning = false;
+            cancelAnimationFrame(animationFrameId);
+            startStopBtn.textContent = 'Start';
+            startStopBtn.classList.remove('bg-yellow-500', 'hover:bg-yellow-600');
+            startStopBtn.classList.add('bg-blue-500', 'hover:bg-blue-600');
+            stepBtn.disabled = false;
+            totalIterationsInput.disabled = false;
+        }
+
+        function step() {
+            if (!isRunning) {
+                trainingStep();
+            }
+        }
+
+        function reset() {
+            stop();
+            initializeNetwork();
+        }
+
+        // --- Event Listeners ---
+        startStopBtn.addEventListener('click', () => {
+            if (isRunning) stop();
+            else start();
+        });
+        resetBtn.addEventListener('click', reset);
+        stepBtn.addEventListener('click', step);
+        document.addEventListener('mousemove', (e) => {
+            tooltip.style.left = `${e.pageX + 15}px`;
+            tooltip.style.top = `${e.pageY + 15}px`;
+        });
+
+        // --- Initial Start ---
+        initializeNetwork();
+        stop(); // Start in a paused state
+
+    </script>
+</body>
+</html>

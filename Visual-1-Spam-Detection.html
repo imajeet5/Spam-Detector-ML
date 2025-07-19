@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Neural Network Visualization for Spam Detection</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f0f0f0;
+            margin: 0;
+            padding: 20px;
+        }
+        #container {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        #network {
+            border: 1px solid #ccc;
+            background-color: white;
+        }
+        #controls {
+            margin-top: 20px;
+            text-align: center;
+        }
+        button {
+            padding: 10px 20px;
+            margin: 5px;
+            font-size: 16px;
+            cursor: pointer;
+        }
+        #info {
+            margin-top: 20px;
+            width: 80%;
+            text-align: left;
+        }
+        #error {
+            font-weight: bold;
+        }
+        .layer-label {
+            font-size: 12px;
+            fill: #333;
+        }
+        .neuron {
+            fill: #add8e6;
+            stroke: #000;
+            stroke-width: 1;
+        }
+        .connection {
+            stroke: #999;
+            stroke-width: 1;
+        }
+        .weight-label {
+            font-size: 8px;
+            fill: #666;
+        }
+        .activation-label {
+            font-size: 10px;
+            fill: #000;
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <h1>Neural Network Visualization for Spam Detection</h1>
+        <svg id="network" width="1200" height="600"></svg>
+        <div id="controls">
+            <label for="example-select">Select Training Example:</label>
+            <select id="example-select">
+                <option value="0">Example 1: "hello, let's schedule a meeting" (Not Spam)</option>
+                <option value="1">Example 2: "urgent action required, verify your account" (Spam)</option>
+                <option value="2">Example 3: "buy now, free money for every winner" (Spam)</option>
+                <option value="3">Example 4: "hello, meeting about your account" (Not Spam)</option>
+            </select>
+            <button id="reset">Reset Network</button>
+            <button id="step">Step (1 Iteration)</button>
+            <button id="train-100">Train 100 Steps</button>
+            <div id="iteration">Iteration: 0</div>
+            <div id="error">Average Error: N/A</div>
+        </div>
+        <div id="info">
+            <h3>About</h3>
+            <p>This visualizes the neural network from script2.py for spam detection.</p>
+            <p>Input: 12 neurons (one per vocabulary word).</p>
+            <p>Hidden: 5 neurons.</p>
+            <p>Output: 1 neuron (spam probability >0.5 = Spam).</p>
+            <p>Weights shown on connections (rounded). Activations for selected example shown next to neurons.</p>
+            <p>Training uses batch gradient descent on all 4 examples, but activations visualized for one at a time.</p>
+        </div>
+    </div>
+
+    <script>
+        // Vocabulary from SpamDetector.py
+        const vocabulary = [
+            "action", "account", "buy", "free", "hello",
+            "meeting", "money", "now", "urgent", "verify",
+            "winner", "your"
+        ];
+
+        // Training sentences and labels
+        const sentences = [
+            "hello, let's schedule a meeting",  // 0: Not Spam
+            "urgent action required, verify your account",  // 1: Spam
+            "buy now, free money for every winner",  // 1: Spam
+            "hello, meeting about your account"  // 0: Not Spam
+        ];
+        const labels = [[0], [1], [1], [0]];
+
+        // Function to convert sentence to vector
+        function sentenceToVector(sentence, vocab) {
+            const words = sentence.toLowerCase().split(/\s+/);
+            return vocab.map(word => words.includes(word) ? 1 : 0);
+        }
+
+        // Input data X (4x12)
+        const X = sentences.map(s => sentenceToVector(s, vocabulary));
+
+        // Sigmoid and derivative
+        function sigmoid(x) {
+            return 1 / (1 + Math.exp(-x));
+        }
+        function sigmoidDerivative(x) {
+            return x * (1 - x);
+        }
+
+        // Network parameters
+        const inputSize = 12;
+        const hiddenSize = 5;
+        const outputSize = 1;
+        let weights0, weights1; // weights0: 12x5, weights1: 5x1
+        let iteration = 0;
+        let currentError = 0;
+
+        // SVG elements
+        const svg = document.getElementById('network');
+        const neuronRadius = 20;
+        const layerGap = 300;
+        const verticalSpacing = 40;
+
+        // Positions
+        const inputX = 100;
+        const hiddenX = inputX + layerGap;
+        const outputX = hiddenX + layerGap;
+        function getY(layerSize, index) {
+            const totalHeight = (layerSize - 1) * verticalSpacing;
+            const startY = (600 - totalHeight) / 2;
+            return startY + index * verticalSpacing;
+        }
+
+        // Initialize or reset network
+        function initNetwork() {
+            // Random seed approximation (not exact as Python's np.random.seed(42))
+            Math.seed = 42;
+            function seededRandom() {
+                Math.seed = (Math.seed * 16807) % 2147483647;
+                return (Math.seed / 2147483647) * 2 - 1;
+            }
+
+            weights0 = Array.from({length: inputSize}, () =>
+                Array.from({length: hiddenSize}, seededRandom)
+            );
+            weights1 = Array.from({length: hiddenSize}, () =>
+                [seededRandom()]
+            );
+            iteration = 0;
+            currentError = 0;
+            updateDisplay();
+        }
+
+        // Matrix operations (vanilla JS)
+        function dot(A, B) {
+            const rowsA = A.length;
+            const colsA = A[0].length;
+            const colsB = B[0].length;
+            const result = Array.from({length: rowsA}, () => Array(colsB).fill(0));
+            for (let i = 0; i < rowsA; i++) {
+                for (let j = 0; j < colsB; j++) {
+                    for (let k = 0; k < colsA; k++) {
+                        result[i][j] += A[i][k] * B[k][j];
+                    }
+                }
+            }
+            return result;
+        }
+
+        function transpose(M) {
+            const rows = M.length;
+            const cols = M[0].length;
+            return Array.from({length: cols}, (_, j) =>
+                Array.from({length: rows}, (_, i) => M[i][j])
+            );
+        }
+
+        function elementwise(A, B, op) {
+            return A.map((row, i) => row.map((val, j) => op(val, B[i][j])));
+        }
+
+        function scalarMap(M, fn) {
+            return M.map(row => row.map(fn));
+        }
+
+        // Training step (one iteration on full batch)
+        function trainStep() {
+            // Forward pass (batch: 4 examples)
+            const layer0 = X;
+            const layer1Z = dot(layer0, weights0);
+            const layer1 = scalarMap(layer1Z, sigmoid);
+            const layer2Z = dot(layer1, weights1);
+            const layer2 = scalarMap(layer2Z, sigmoid);
+
+            // Error
+            const layer2Error = elementwise(labels, layer2, (a, b) => a - b);
+            currentError = layer2Error.reduce((sum, row) => sum + Math.abs(row[0]), 0) / 4;
+
+            // Backprop
+            const layer2Delta = elementwise(layer2Error, scalarMap(layer2, sigmoidDerivative), (a, b) => a * b);
+            const layer1Error = dot(layer2Delta, transpose(weights1));
+            const layer1Delta = elementwise(layer1Error, scalarMap(layer1, sigmoidDerivative), (a, b) => a * b);
+
+            // Update weights (implicit lr=1, sum over batch)
+            const dw1 = dot(transpose(layer1), layer2Delta);
+            weights1 = elementwise(weights1, dw1, (a, b) => a + b);
+            const dw0 = dot(transpose(layer0), layer1Delta);
+            weights0 = elementwise(weights0, dw0, (a, b) => a + b);
+
+            iteration++;
+            updateDisplay();
+        }
+
+        // Draw the network
+        function drawNetwork() {
+            svg.innerHTML = ''; // Clear
+
+            // Layer labels
+            addText(inputX - 50, 20, 'Input Layer (Words)');
+            addText(hiddenX - 50, 20, 'Hidden Layer');
+            addText(outputX - 50, 20, 'Output (Spam Prob)');
+
+            // Input neurons
+            for (let i = 0; i < inputSize; i++) {
+                const y = getY(inputSize, i);
+                addCircle(inputX, y, 'neuron');
+                addText(inputX - 60, y + 5, vocabulary[i], 'layer-label');
+            }
+
+            // Hidden neurons
+            for (let i = 0; i < hiddenSize; i++) {
+                const y = getY(hiddenSize, i);
+                addCircle(hiddenX, y, 'neuron');
+            }
+
+            // Output neuron
+            const outputY = getY(1, 0);
+            addCircle(outputX, outputY, 'neuron');
+
+            // Connections and weights
+            for (let i = 0; i < inputSize; i++) {
+                const y1 = getY(inputSize, i);
+                for (let j = 0; j < hiddenSize; j++) {
+                    const y2 = getY(hiddenSize, j);
+                    addLine(inputX, y1, hiddenX, y2);
+                    const midX = (inputX + hiddenX) / 2;
+                    const midY = (y1 + y2) / 2;
+                    addText(midX, midY, weights0[i][j].toFixed(2), 'weight-label');
+                }
+            }
+            for (let i = 0; i < hiddenSize; i++) {
+                const y1 = getY(hiddenSize, i);
+                addLine(hiddenX, y1, outputX, outputY);
+                const midX = (hiddenX + outputX) / 2;
+                const midY = (y1 + outputY) / 2;
+                addText(midX, midY, weights1[i][0].toFixed(2), 'weight-label');
+            }
+        }
+
+        // Add activations for selected example
+        function addActivations(selectedIndex) {
+            const input = [X[selectedIndex]]; // 1x12
+            const hiddenZ = dot(input, weights0);
+            const hiddenA = scalarMap(hiddenZ, sigmoid); // 1x5
+            const outputZ = dot(hiddenA, weights1);
+            const outputA = scalarMap(outputZ, sigmoid); // 1x1
+
+            // Input activations (0 or 1)
+            for (let i = 0; i < inputSize; i++) {
+                const y = getY(inputSize, i);
+                addText(inputX + neuronRadius + 5, y, input[0][i].toFixed(1), 'activation-label');
+            }
+
+            // Hidden activations
+            for (let i = 0; i < hiddenSize; i++) {
+                const y = getY(hiddenSize, i);
+                addText(hiddenX + neuronRadius + 5, y, hiddenA[0][i].toFixed(2), 'activation-label');
+            }
+
+            // Output activation
+            const outputY = getY(1, 0);
+            addText(outputX + neuronRadius + 5, outputY, outputA[0][0].toFixed(2), 'activation-label');
+        }
+
+        // Helper SVG functions
+        function addCircle(x, y, className) {
+            const circle = document.createElementNS("http://www.w3.org/2000/svg", "circle");
+            circle.setAttribute("cx", x);
+            circle.setAttribute("cy", y);
+            circle.setAttribute("r", neuronRadius);
+            circle.setAttribute("class", className);
+            svg.appendChild(circle);
+        }
+        function addLine(x1, y1, x2, y2) {
+            const line = document.createElementNS("http://www.w3.org/2000/svg", "line");
+            line.setAttribute("x1", x1 + neuronRadius);
+            line.setAttribute("y1", y1);
+            line.setAttribute("x2", x2 - neuronRadius);
+            line.setAttribute("y2", y2);
+            line.setAttribute("class", "connection");
+            svg.appendChild(line);
+        }
+        function addText(x, y, text, className = 'layer-label') {
+            const txt = document.createElementNS("http://www.w3.org/2000/svg", "text");
+            txt.setAttribute("x", x);
+            txt.setAttribute("y", y);
+            txt.setAttribute("class", className);
+            txt.textContent = text;
+            svg.appendChild(txt);
+        }
+
+        // Update display
+        function updateDisplay() {
+            drawNetwork();
+            const selectedIndex = parseInt(document.getElementById('example-select').value);
+            addActivations(selectedIndex);
+            document.getElementById('iteration').textContent = `Iteration: ${iteration}`;
+            document.getElementById('error').textContent = `Average Error: ${currentError.toFixed(4)}`;
+        }
+
+        // Event listeners
+        document.getElementById('reset').addEventListener('click', initNetwork);
+        document.getElementById('step').addEventListener('click', trainStep);
+        document.getElementById('train-100').addEventListener('click', () => {
+            for (let i = 0; i < 100; i++) trainStep();
+        });
+        document.getElementById('example-select').addEventListener('change', updateDisplay);
+
+        // Initial setup
+        initNetwork();
+    </script>
+</body>
+</html>
