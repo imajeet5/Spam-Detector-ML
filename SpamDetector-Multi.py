@@ -73,7 +73,7 @@ weights1 = 2 * np.random.random((5, 1)) - 1
 # This is where the network learns by adjusting weights and biases.
 print("Training the network...")
 # 20000
-for j in range(20000):
+for j in range(200000):
 
     # --- FORWARD PASS ---
     # Pass the input data through the layers
